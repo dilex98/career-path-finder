@@ -64,6 +64,7 @@ if prov:
     view = view[view["province"].isin(prov)]
 if city.strip():
     view = view[view["city"].str.contains(city.strip(), case=False, na=False)]
+    st.caption("Many postings have no city in the government file, so a city filter hides them.")
 if words.strip():
     pattern = "|".join(w.strip() for w in words.split(",") if w.strip())
     view = view[view["title"].str.contains(pattern, case=False, na=False, regex=True)]
@@ -71,17 +72,23 @@ if words.strip():
 m1, m2, m3 = st.columns(3)
 m1.metric("Postings in the file", f"{len(jobs):,}")
 m2.metric("Matching your filters", f"{len(view):,}")
-m3.metric("Different employers", f"{view['employer'].nunique():,}")
+m3.metric("Different occupations", f"{view['occupation'].nunique():,}")
 
-show = view[["title", "employer", "city", "province", "salary", "noc", "link"]].head(2000)
+cols = ["title", "occupation", "city", "province", "salary", "language", "education", "experience",
+        "job_type", "posted", "source", "link"]
+show = view[cols].head(2000)
 st.dataframe(
     show, use_container_width=True, hide_index=True,
     column_config={
-        "title": "Job title", "employer": "Employer", "city": "City", "province": "Province",
-        "salary": "Salary", "noc": "Occupation code (NOC)",
-        "link": st.column_config.LinkColumn("Posting", display_text="Open on Job Bank"),
+        "title": "Job title", "occupation": "Occupation (NOC)", "city": "City or region",
+        "province": "Province", "salary": "Salary", "language": "Language",
+        "education": "Education", "experience": "Experience", "job_type": "Type",
+        "posted": "Posted", "source": "Posted on",
+        "link": st.column_config.LinkColumn("Find it", display_text="Search on Job Bank"),
     },
 )
+st.caption("The government's open-data file does not include employer names or full job descriptions. "
+           "We will add those from other sources in a later step.")
 if len(view) > 2000:
     st.caption("Showing the first 2,000 matches. Add a keyword or a city to narrow the list.")
 

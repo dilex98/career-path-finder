@@ -71,34 +71,63 @@ def download(url):
     return read_csv_bytes(raw)
 
 
-def _find(cols, *words, avoid=()):
-    for c in cols:
-        lc = c.lower()
-        if any(w in lc for w in words) and not any(a in lc for a in avoid):
-            return c
+def _norm(name):
+    return re.sub(r"\s+", " ", str(name)).strip().lower()
+
+
+def _find(cols, *names):
+    """Return the first column whose name contains one of `names`."""
+    normed = {c: _norm(c) for c in cols}
+    for n in names:
+        for c, nc in normed.items():
+            if nc == n:
+                return c
+    for n in names:
+        for c, nc in normed.items():
+            if n in nc:
+                return c
     return None
+
+
+# What the Job Bank file calls each piece of information (checked on the 2026 files).
+# Note: the open-data file has NO employer name and NO job description,
+# and the city is often blank ("NA"), especially for postings from partner sites.
+FIELDS = {
+    "title": ("job title",),
+    "occupation": ("noc21 code name", "noc 2021 code name", "noc code name"),
+    "noc": ("noc21 code", "noc 2021 code"),
+    "province": ("province/territory", "province"),
+    "city": ("city",),
+    "region": ("economic region",),
+    "salary": ("salary condition detail", "salary"),
+    "language": ("official language",),
+    "education": ("education los", "education"),
+    "experience": ("experience level", "experience"),
+    "job_type": ("employment type",),
+    "term": ("employment term",),
+    "posted": ("first posting date", "posting date"),
+    "external": ("external indicator",),
+}
+
+EMPTY = {"NA": "", "N/A": "", "*No data": "", "nan": "", "None": ""}
 
 
 def tidy(df):
     """Map Job Bank's columns to simple names the app uses."""
     cols = list(df.columns)
-    pick = {
-        "title": _find(cols, "job title", "title", "titre"),
-        "employer": _find(cols, "employer", "employeur", "business", "entreprise", "company"),
-        "city": _find(cols, "city", "ville", "municipal"),
-        "province": _find(cols, "province", "territor"),
-        "noc": _find(cols, "noc", "cnp"),
-        "salary": _find(cols, "salary", "salaire", "wage"),
-        "posting_id": _find(cols, "job posting id", "posting id", "job id", "numéro", "number", avoid=("noc", "naics", "vacanc", "phone")),
-    }
+    pick = {k: _find(cols, *names) for k, names in FIELDS.items()}
     if not pick["title"]:
         raise ValueError("could not find a job title column. Columns found: " + ", ".join(map(str, cols[:40])))
     out = pd.DataFrame(index=df.index)
     for k, v in pick.items():
-        out[k] = df[v] if v else ""
-    out = out.replace({"NA": "", "N/A": ""})
+        out[k] = df[v].astype(str).str.strip() if v else ""
+    out = out.replace(EMPTY)
+    out["city"] = out["city"].where(out["city"] != "", out["region"])
+    out["source"] = out["external"].map({"1": "Partner site", "0": "Job Bank"}).fillna("")
     # one text column with everything, used later for matching
     out["all_text"] = df.astype(str).agg(" · ".join, axis=1)
-    ids = out["posting_id"].astype(str).str.extract(r"(\d{5,})")[0]
-    out["link"] = ("https://www.jobbank.gc.ca/jobsearch/jobposting/" + ids).where(ids.notna(), "")
+    # the file has no posting ID, so link to a Job Bank search for the same title and province
+    q = out["title"].str.replace(" ", "+", regex=False)
+    p = out["province"].str.replace(" ", "+", regex=False)
+    out["link"] = "https://www.jobbank.gc.ca/jobsearch/jobsearch?searchstring=" + q + "&locationstring=" + p
     return out, pick
