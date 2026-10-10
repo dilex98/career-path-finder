@@ -42,12 +42,25 @@ def list_files():
 
 def read_csv_bytes(raw):
     """Read a Job Bank CSV, whatever its encoding or separator."""
-    for enc in ("utf-8-sig", "cp1252", "latin-1"):
+    if raw[:200].lstrip().lower().startswith((b"<!doctype", b"<html")):
+        raise ValueError("the government site sent a web page instead of the data file")
+    # Job Bank files are often UTF-16 (BOM \xff\xfe or lots of zero bytes)
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        encodings = ("utf-16",)
+    elif raw[:4000].count(b"\x00") > 500:
+        encodings = ("utf-16-le",) if raw[1:2] == b"\x00" else ("utf-16-be",)
+    else:
+        encodings = ("utf-8-sig", "cp1252", "latin-1")
+    text = None
+    for enc in encodings:
         try:
             text = raw.decode(enc)
             break
         except UnicodeDecodeError:
             continue
+    if text is None:
+        text = raw.decode("latin-1")
+    text = text.lstrip("\ufeff")
     first = text.split("\n", 1)[0]
     sep = max([",", "\t", ";"], key=first.count)
     return pd.read_csv(io.StringIO(text), sep=sep, dtype=str, keep_default_na=False)
@@ -78,7 +91,11 @@ def tidy(df):
         "salary": _find(cols, "salary", "salaire", "wage"),
         "posting_id": _find(cols, "job posting id", "posting id", "job id", "numéro", "number", avoid=("noc", "naics", "vacanc", "phone")),
     }
-    out = pd.DataFrame({k: (df[v] if v else "") for k, v in pick.items()})
+    if not pick["title"]:
+        raise ValueError("could not find a job title column. Columns found: " + ", ".join(map(str, cols[:40])))
+    out = pd.DataFrame(index=df.index)
+    for k, v in pick.items():
+        out[k] = df[v] if v else ""
     out = out.replace({"NA": "", "N/A": ""})
     # one text column with everything, used later for matching
     out["all_text"] = df.astype(str).agg(" · ".join, axis=1)
