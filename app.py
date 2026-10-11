@@ -37,7 +37,7 @@ COLUMNS = ["title", "employer", "occupation", "noc", "city", "province", "salary
 NUMERIC = ["salary_year_min", "salary_year_max", "education_level", "experience_years"]
 
 # Bump this number whenever the way jobs are read changes, so old cached tables are not reused.
-DATA_VERSION = 6
+DATA_VERSION = 7
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
@@ -45,7 +45,7 @@ def get_files():
     return jobbank.list_files()
 
 
-@st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=2)
+@st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=6)
 def get_jobbank(url, version=DATA_VERSION):
     raw = jobbank.download(url)
     jobs, mapping = jobbank.tidy(raw)
@@ -95,13 +95,26 @@ if "Job Bank (government)" in sources:
             files = get_files()
         if not files:
             raise RuntimeError("no English CSV files were listed")
-        labels = [f["name"] for f in files]
-        choice = st.selectbox("Job Bank month", labels, index=0,
-                              help="The newest month is picked automatically. Job Bank publishes a new file every month.")
-        with st.spinner("Downloading the Job Bank postings (the first time can take a minute)…"):
-            jb, mapping, raw_cols = get_jobbank(files[labels.index(choice)]["url"])
-        tables.append(complete(jb.copy()))
-        notes["Job Bank"] = (raw_cols, mapping)
+        n_months = st.slider("Job Bank months to load", 1, 4, 3,
+                             help="Each monthly file only has the jobs first posted that month. Older jobs can still "
+                                  "be open, so we load the last few months together.")
+        jb_tables, loaded = [], []
+        for f in files[:n_months]:
+            with st.spinner(f"Downloading {f['name']} (the first time can take a minute)…"):
+                try:
+                    jb, mapping, raw_cols = get_jobbank(f["url"])
+                except Exception as err:
+                    st.caption(f"Skipped {f['name']}: {err}")
+                    continue
+            jb_tables.append(complete(jb.copy()))
+            loaded.append(f["name"])
+            notes["Job Bank"] = (raw_cols, mapping)
+        if not jb_tables:
+            raise RuntimeError("none of the monthly files could be downloaded")
+        jb_all, repeats = jobbank.combine(jb_tables)
+        st.caption(f"Loaded {len(loaded)} monthly file(s): " + " · ".join(loaded)
+                   + f" · {repeats:,} repeated postings removed.")
+        tables.append(jb_all)
     except Exception as err:  # the government site can be slow or down
         st.warning(f"Could not download the Job Bank file automatically ({err}). "
                    f"You can download it from the [Job Bank data page]({jobbank.DATASET_PAGE}) and upload it here.")
@@ -109,7 +122,7 @@ if "Job Bank (government)" in sources:
         if up:
             raw = jobbank.read_csv_bytes(up.getvalue())
             jb, mapping = jobbank.tidy(raw)
-            tables.append(complete(jb))
+            tables.append(jobbank.combine([complete(jb)])[0])
             notes["Job Bank"] = (list(raw.columns), mapping)
 
 company_status = None
@@ -123,6 +136,9 @@ if not tables:
     st.stop()
 
 jobs = pd.concat(tables, ignore_index=True)
+if "age" not in jobs.columns:
+    jobs["age"], jobs["age_days"] = "", None
+jobs["age"] = jobs["age"].fillna("")
 jobs["has_profile"] = jobs["noc"].isin(profiles.keys())
 # Who can apply: read from the full description when we have one (company sites, later alerts and pasted jobs).
 jobs["work_permit"] = [eligibility.requirement(d) if d else eligibility.JOB_BANK_NOTE for d in jobs["description"]]
@@ -140,7 +156,8 @@ prov = r1[0].multiselect("Province", provinces,
                          default=[p for p in provinces if re.search(r"qu[eé]bec|^qc$", p, re.I)])
 words = r1[1].text_input("Keywords in the job title or occupation",
                          placeholder="e.g. analyst, nurse, accountant, développeur")
-posted_within = r1[2].selectbox("Posted within", ["Any time", "7 days", "14 days", "30 days", "60 days"])
+posted_within = r1[2].selectbox("Posted within", ["Any time", "7 days", "14 days", "30 days", "60 days", "90 days"],
+                                help="Job Bank's files have no closing date. Older jobs are more likely to be filled.")
 
 r2 = st.columns(4)
 edu_labels = ["Any", "No degree required", "Secondary (high) school", "College, CEGEP, trade or apprenticeship",
@@ -161,9 +178,8 @@ if words.strip():
     view = view[view["title"].str.contains(pattern, case=False, na=False, regex=True)
                 | view["occupation"].str.contains(pattern, case=False, na=False, regex=True)]
 if posted_within != "Any time":
-    newest = jobs["posted_date"].max()
     days = int(posted_within.split()[0])
-    view = view[view["posted_date"].isna() | (view["posted_date"] >= newest - pd.Timedelta(days=days))]
+    view = view[view["posted_date"].isna() | (view["posted_date"] >= pd.Timestamp.today().normalize() - pd.Timedelta(days=days))]
 if my_edu != "Any":
     lvl = edu_labels.index(my_edu)
     view = view[view["education_level"].isna() | (view["education_level"] <= lvl)]
@@ -184,10 +200,21 @@ m[1].metric("Matching your filters", f"{len(view):,}")
 m[2].metric("Occupations", f"{view['noc'].replace('', pd.NA).nunique():,}")
 m[3].metric("With an occupation profile", pct(view["has_profile"]))
 
+jbj = jobs[jobs["source"] != "Company site"]
+if len(jbj) and jbj["age_days"].notna().any():
+    with st.expander("How many Job Bank jobs are probably still open? (compare with the total on jobbank.gc.ca)"):
+        ages = jbj["age_days"]
+        st.dataframe(pd.DataFrame({
+            "Posted within the last": ["30 days", "60 days", "90 days", "120 days", "Any time"],
+            "Job Bank jobs": [f"{(ages <= d).sum():,}" for d in (30, 60, 90, 120)] + [f"{len(jbj):,}"],
+        }), hide_index=True)
+        st.caption("Job Bank's files don't say when a job closes. Compare these numbers with the total on "
+                   "jobbank.gc.ca: the window that comes closest is our best guess of how long jobs stay open.")
+
 # ---- 3. the table, with a click to see details ------------------------------------
 view = view.assign(occupation_link=view["noc"].map(oasis.occupation_url))
 table = view[["can_apply", "title", "employer", "occupation", "occupation_link", "city", "province", "salary", "salary_year_min",
-              "salary_year_max", "language", "education", "experience", "work_permit", "job_type", "posted",
+              "salary_year_max", "language", "education", "experience", "work_permit", "job_type", "posted", "age",
               "source", "link"]].head(2000)
 if status == "Prefer not to say":
     table = table.drop(columns="can_apply")
@@ -204,7 +231,7 @@ event = st.dataframe(
         "salary_year_min": st.column_config.NumberColumn("Yearly from (est.)", format="$%d"),
         "salary_year_max": st.column_config.NumberColumn("Yearly to (est.)", format="$%d"),
         "language": "Language", "education": "Education", "experience": "Experience",
-        "job_type": "Type", "posted": "Posted", "source": "Source",
+        "job_type": "Type", "posted": "Posted", "age": "How old", "source": "Source",
         "link": st.column_config.LinkColumn("Job posting", display_text="Open"),
         "occupation_link": st.column_config.LinkColumn("Occupation details", display_text="View",
                                                        help="Official Government of Canada page for this occupation"),
@@ -230,7 +257,7 @@ if rows:
             "Experience": job["experience"] or "Not given",
             "Language": job["language"] or "Not given",
             "Type": job["job_type"] or "Not given",
-            "Posted": job["posted"] or "Not given",
+            "Posted": (job["posted"] + (f" ({full['age']})" if full["age"] else "")) or "Not given",
             "Who can apply": full["work_permit"],
         }
         for k, v in facts.items():

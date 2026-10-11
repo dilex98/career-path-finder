@@ -127,8 +127,9 @@ def tidy(df):
     out = out.replace(EMPTY)
     out["city"] = out["city"].where(out["city"] != "", out["region"])
     out["source"] = out["external"].map({"1": "Partner site", "0": "Job Bank"}).fillna("")
-    # one text column with everything, used later for matching
-    out["all_text"] = df.astype(str).agg(" · ".join, axis=1)
+    # one short text column used later for matching (the full row was too heavy for several months of files)
+    out["all_text"] = (out["title"] + " · " + out["occupation"] + " · " + out["education"] + " · "
+                       + out["experience"] + " · " + out["language"])
     # the file has no posting ID, so link to a Job Bank search for the same title and province
     q = out["title"].str.replace(" ", "+", regex=False)
     p = out["province"].str.replace(" ", "+", regex=False)
@@ -215,3 +216,26 @@ def clean(out):
     out["language"] = out["language"].map(_language)
     out["posted_date"] = pd.to_datetime(out["posted"], errors="coerce", format="mixed")
     return out
+
+
+# ---- several months together -------------------------------------------------
+# Each monthly file holds the jobs FIRST POSTED that month (checked on the August 2026 file:
+# no posting dated July 31 or earlier). Jobs posted earlier can still be open, so the app
+# stacks the last few files and labels every job by age. The files say nothing about
+# closing dates, so "probably still open" is an estimate.
+SAME_JOB = ["title", "noc", "province", "city", "posted", "salary_min", "salary_max", "job_type", "language"]
+AGE_GROUPS = [(30, "Posted in the last 30 days"), (60, "31–60 days ago"), (90, "61–90 days ago"),
+              (10_000, "More than 90 days ago – may be filled")]
+
+
+def combine(tables, today=None):
+    """Stack monthly tables, drop repeats, and add the age of each job in days."""
+    jobs = pd.concat(tables, ignore_index=True)
+    before = len(jobs)
+    jobs = jobs.drop_duplicates(subset=[c for c in SAME_JOB if c in jobs.columns]).reset_index(drop=True)
+    today = pd.Timestamp(today) if today is not None else pd.Timestamp.today().normalize()
+    jobs["age_days"] = (today - jobs["posted_date"]).dt.days
+    jobs["age"] = ""
+    for limit, label in reversed(AGE_GROUPS):
+        jobs.loc[jobs["age_days"] <= limit, "age"] = label
+    return jobs, before - len(jobs)
