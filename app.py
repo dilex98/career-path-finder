@@ -13,10 +13,17 @@ import re
 import pandas as pd
 import streamlit as st
 
+import importlib
+
 import eligibility
 import feeds
 import jobbank
 import oasis
+
+# Streamlit Cloud reruns app.py after each update but can keep old copies of the helper files in memory.
+# Reloading them makes sure every update is picked up without restarting the app.
+for _module in (eligibility, feeds, jobbank, oasis):
+    importlib.reload(_module)
 
 st.set_page_config(page_title="Career Path Finder", page_icon="🧭", layout="wide")
 st.title("Career Path Finder")
