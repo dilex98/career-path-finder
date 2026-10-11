@@ -7,7 +7,7 @@ Capstone project, INDU 6993, Concordia University (Loïg Glo, Dilex Manirambona,
 **Goal:** help job seekers in Canada find the jobs they can realistically get, and plan the path to the role they want.
 
 ## Build steps
-1. **The box of jobs** – loads the newest Job Bank open-data file (all fields) ← *current*
+1. **The box of jobs** – Job Bank open data (monthly) + company job sites on Greenhouse, Lever and Ashby (every few hours) ← *current*
 2. The reader – reads a PDF or Word CV
 3. The judge – ranks jobs and explains fit and gaps
 4. The question-asker – asks about missing skills and must-haves, then updates the list
@@ -17,6 +17,7 @@ Capstone project, INDU 6993, Concordia University (Loïg Glo, Dilex Manirambona,
 ## Files
 - `app.py` – the website (Streamlit)
 - `jobbank.py` – finds and downloads the newest Job Bank file
+- `feeds.py` – reads company job feeds; add a company by adding one line to `COMPANIES`
 - `requirements.txt` – Python packages the website needs
 
 Data: [Job Bank open data](https://open.canada.ca/data/en/dataset/ea639e28-c0fc-48bf-b5dd-b8899bd43072), Open Government Licence – Canada.
