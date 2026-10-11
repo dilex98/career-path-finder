@@ -13,6 +13,7 @@ import re
 import pandas as pd
 import streamlit as st
 
+import eligibility
 import feeds
 import jobbank
 import oasis
@@ -21,13 +22,22 @@ st.set_page_config(page_title="Career Path Finder", page_icon="🧭", layout="wi
 st.title("Career Path Finder")
 st.caption("Step 1 of the build: the box of jobs · Job Bank open data + official occupation profiles (OaSIS)")
 
+# ---- 0. about you (asked once; kept while the page is open) -------------------------
+with st.sidebar:
+    st.header("About you")
+    st.caption("Asked once and used on every job. Nothing is saved.")
+    status = st.selectbox("Your status to work in Canada", eligibility.STATUSES, key="status",
+                          help="Used to flag jobs: ✅ you can apply · ⚠️ check the posting · ❌ not eligible as written.")
+    hide_blocked = st.checkbox("Hide jobs I can't apply to (❌)", value=False, key="hide_blocked",
+                               disabled=status == "Prefer not to say")
+
 COLUMNS = ["title", "employer", "occupation", "noc", "city", "province", "salary", "salary_year_min",
            "salary_year_max", "language", "education", "education_level", "experience", "experience_years",
            "job_type", "posted", "posted_date", "source", "link", "description", "all_text"]
 NUMERIC = ["salary_year_min", "salary_year_max", "education_level", "experience_years"]
 
 # Bump this number whenever the way jobs are read changes, so old cached tables are not reused.
-DATA_VERSION = 5
+DATA_VERSION = 6
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
@@ -114,6 +124,11 @@ if not tables:
 
 jobs = pd.concat(tables, ignore_index=True)
 jobs["has_profile"] = jobs["noc"].isin(profiles.keys())
+# Who can apply: read from the full description when we have one (company sites, later alerts and pasted jobs).
+jobs["work_permit"] = [eligibility.requirement(d) if d else eligibility.JOB_BANK_NOTE for d in jobs["description"]]
+fits = [eligibility.fit(status, r) for r in jobs["work_permit"]]
+jobs["can_apply"] = [f[0] for f in fits]
+jobs["can_apply_why"] = [f[1] for f in fits]
 # The text the CV will be compared with later: the posting itself plus its occupation profile.
 jobs["all_text"] = jobs["all_text"] + " · " + jobs["noc"].map(lambda n: oasis.profile_text(profiles.get(n)))
 
@@ -158,6 +173,8 @@ if min_pay:
     view = view[view["salary_year_max"].isna() | (view["salary_year_max"] >= min_pay)]
 if langs:
     view = view[view["language"].isin(langs)]
+if hide_blocked:
+    view = view[view["can_apply"] != "❌"]
 
 view = view.sort_values("posted_date", ascending=False, na_position="last")
 
@@ -169,14 +186,19 @@ m[3].metric("With an occupation profile", pct(view["has_profile"]))
 
 # ---- 3. the table, with a click to see details ------------------------------------
 view = view.assign(occupation_link=view["noc"].map(oasis.occupation_url))
-table = view[["title", "employer", "occupation", "occupation_link", "city", "province", "salary", "salary_year_min",
-              "salary_year_max", "language", "education", "experience", "job_type", "posted", "source",
-              "link"]].head(2000)
+table = view[["can_apply", "title", "employer", "occupation", "occupation_link", "city", "province", "salary", "salary_year_min",
+              "salary_year_max", "language", "education", "experience", "work_permit", "job_type", "posted",
+              "source", "link"]].head(2000)
+if status == "Prefer not to say":
+    table = table.drop(columns="can_apply")
 st.info("👉 Tick the small box at the left of a row to open that job's details and its occupation profile below the table. "
         "The **View** link opens the official occupation page on the Government of Canada website.")
 event = st.dataframe(
     table, width="stretch", hide_index=True, on_select="rerun", selection_mode="single-row", key="jobs_table",
     column_config={
+        "can_apply": st.column_config.TextColumn("Can I apply?", width="small",
+                                                 help="Based on your status in the sidebar"),
+        "work_permit": "Who can apply",
         "title": "Job title", "employer": "Employer", "occupation": "Occupation (NOC)",
         "city": "City or region", "province": "Province", "salary": "Salary (as posted)",
         "salary_year_min": st.column_config.NumberColumn("Yearly from (est.)", format="$%d"),
@@ -209,9 +231,12 @@ if rows:
             "Language": job["language"] or "Not given",
             "Type": job["job_type"] or "Not given",
             "Posted": job["posted"] or "Not given",
+            "Who can apply": full["work_permit"],
         }
         for k, v in facts.items():
             st.markdown(f"- **{k}:** {v}")
+        if full["can_apply"]:
+            st.markdown(f"**Can I apply?** {full['can_apply']} {full['can_apply_why']}")
         if job["link"]:
             st.link_button("Open on " + ("the company site" if job["source"] == "Company site" else "Job Bank"),
                            job["link"])
@@ -235,6 +260,18 @@ if rows:
                 st.markdown("*Usual requirements*\n" + "\n".join(f"- {r}" for r in p["requirements"]))
         elif not full["description"]:
             st.info("No description or occupation profile is available for this job.")
+
+# ---- 3b. check any job description ----------------------------------------------
+with st.expander("Check a job description: who can apply? (paste any job ad)"):
+    pasted = st.text_area("Paste the full job description here (English or French)", height=150, key="pasted")
+    if pasted.strip():
+        req = eligibility.requirement(pasted)
+        st.markdown(f"**What the job says:** {req}")
+        icon, why = eligibility.fit(status, req)
+        if icon:
+            st.markdown(f"**For you ({status}):** {icon} {why}")
+        else:
+            st.caption("Choose your status in the sidebar to see whether you can apply.")
 
 # ---- 4. data quality and sources (for the team and the report) -------------------
 with st.expander("Data quality: how complete is the information? (for the team and the report)"):
