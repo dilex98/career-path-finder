@@ -17,12 +17,13 @@ import importlib
 
 import eligibility
 import feeds
+import finder
 import jobbank
 import oasis
 
 # Streamlit Cloud reruns app.py after each update but can keep old copies of the helper files in memory.
 # Reloading them makes sure every update is picked up without restarting the app.
-for _module in (eligibility, feeds, jobbank, oasis):
+for _module in (eligibility, feeds, finder, jobbank, oasis):
     importlib.reload(_module)
 
 st.set_page_config(page_title="Career Path Finder", page_icon="🧭", layout="wide")
@@ -44,7 +45,7 @@ COLUMNS = ["title", "employer", "occupation", "noc", "city", "province", "salary
 NUMERIC = ["salary_year_min", "salary_year_max", "education_level", "experience_years"]
 
 # Bump this number whenever the way jobs are read changes, so old cached tables are not reused.
-DATA_VERSION = 7
+DATA_VERSION = 8
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
@@ -65,8 +66,13 @@ def get_profiles(version=DATA_VERSION):
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def get_company_jobs(version=DATA_VERSION):
-    return feeds.load()
+def get_company_jobs(companies, version=DATA_VERSION):
+    return feeds.load(list(companies))
+
+
+@st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
+def get_found_companies(version=DATA_VERSION):
+    return finder.find()
 
 
 def complete(df):
@@ -121,10 +127,19 @@ if "Job Bank (government)" in sources:
             tables.append(jobbank.combine([complete(jb)])[0])
             notes["Job Bank"] = (list(raw.columns), mapping)
 
-company_status = None
+company_status, found = None, None
 if "Company job sites" in sources:
-    with st.spinner("Collecting jobs from company job sites…"):
-        cj, company_status = get_company_jobs()
+    st.session_state.setdefault("added", [])
+    use_finder = st.checkbox(
+        "Also include companies found automatically (the first search takes a few minutes, then it's kept for 7 days)",
+        value=False, key="use_finder")
+    companies = list(feeds.COMPANIES) + st.session_state["added"]
+    if use_finder:
+        with st.spinner(f"Checking {len(finder.names())} Canadian employers on 7 hiring systems… (a few minutes the first time)"):
+            found = get_found_companies()
+        companies += [(r.system, r.board, r.company) for r in found.itertuples()]
+    with st.spinner(f"Collecting jobs from {len(companies)} company job sites…"):
+        cj, company_status = get_company_jobs(tuple(companies))
     tables.append(complete(cj.copy()))
 
 if not tables:
@@ -285,6 +300,28 @@ with st.expander("Check a job description: who can apply? (paste any job ad)"):
         else:
             st.caption("Choose your status in the sidebar to see whether you can apply.")
 
+# ---- 3c. add a company ----------------------------------------------------------
+if "Company job sites" in sources:
+    with st.expander("Add a company (paste its careers page link)"):
+        url = st.text_input("Careers page link", placeholder="e.g. https://jobs.lever.co/eqbank or https://apply.workable.com/acme",
+                            key="new_company")
+        if url.strip():
+            hit = feeds.from_url(url)
+            if not hit:
+                st.warning("This link isn't from one of the 7 open hiring systems we can read "
+                           "(Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Recruitee, BambooHR).")
+            else:
+                rows, info = feeds._one(hit, details=False)
+                st.write(f"Found **{info['system']}** board **{info['board']}**: {info['status']}, "
+                         f"**{info['jobs in Canada']}** jobs in Canada.")
+                if info["status"] == "ok" and hit not in st.session_state["added"]:
+                    if st.button("Add it to the job list"):
+                        st.session_state["added"].append(hit)
+                        st.rerun()
+        if st.session_state["added"]:
+            st.caption("Added for this visit: " + ", ".join(f"{n} ({a})" for a, _, n in st.session_state["added"])
+                       + ". To keep a company permanently, send the link to whoever maintains `feeds.py`.")
+
 # ---- 4. data quality and sources (for the team and the report) -------------------
 with st.expander("Data quality: how complete is the information? (for the team and the report)"):
     jbv = jobs[jobs["source"] != "Company site"]
@@ -315,9 +352,15 @@ with st.expander("Data quality: how complete is the information? (for the team a
 
 with st.expander("Where do the jobs come from? (for the team)"):
     if company_status is not None:
-        st.write("**Company job sites** (only jobs located in Canada are kept). "
-                 "To add a company, add one line to `COMPANIES` in `feeds.py`.")
+        st.write("**Company job sites** (only jobs located in Canada are kept). Systems read: "
+                 "Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Recruitee, BambooHR.")
+        by_system = company_status.groupby("system").agg(companies=("company", "count"),
+                                                         jobs_in_canada=("jobs in Canada", "sum"))
+        st.dataframe(by_system, width="stretch")
         st.dataframe(company_status, hide_index=True, width="stretch")
+        if found is not None:
+            st.caption(f"Company finder: {len(found)} companies found automatically. They were matched by name, "
+                       "so check the list for look-alike names before relying on them.")
     if "Job Bank" in notes:
         raw_cols, mapping = notes["Job Bank"]
         st.write("**Job Bank file** – columns found:", raw_cols)

@@ -1,16 +1,21 @@
 """Company job feeds - jobs posted directly by employers.
 
-Many companies publish their open jobs through hiring software (Greenhouse,
-Lever, Ashby) that offers a free, public, official feed. Unlike the Job Bank
-open-data file, these feeds include the employer name, the full job
-description and a link to the real posting.
+Many companies publish their open jobs through hiring software (an "applicant
+tracking system") that offers a free, public, official feed. Unlike the Job
+Bank open-data file, these feeds include the employer name, the full job
+description and a link to the real posting, and a job is only in the feed
+while it is open.
 
-To add a company: find its careers page address, e.g.
-  job-boards.greenhouse.io/poka   ->  ("greenhouse", "poka", "Poka")
-  jobs.lever.co/eqbank            ->  ("lever", "eqbank", "EQ Bank")
-  jobs.ashbyhq.com/cohere         ->  ("ashby", "cohere", "Cohere")
-and add a line to COMPANIES below. A company whose feed does not answer is
-simply skipped and listed as "not reachable" in the app.
+Open systems we read (each company has its own "board name" in the address):
+  Greenhouse       job-boards.greenhouse.io/poka          -> ("greenhouse", "poka", "Poka")
+  Lever            jobs.lever.co/eqbank                   -> ("lever", "eqbank", "EQ Bank")
+  Ashby            jobs.ashbyhq.com/cohere                -> ("ashby", "cohere", "Cohere")
+  SmartRecruiters  jobs.smartrecruiters.com/Ubisoft2      -> ("smartrecruiters", "Ubisoft2", "Ubisoft")
+  Workable         apply.workable.com/acme                -> ("workable", "acme", "Acme")
+  Recruitee        acme.recruitee.com                     -> ("recruitee", "acme", "Acme")
+  BambooHR         acme.bamboohr.com/careers              -> ("bamboohr", "acme", "Acme")
+Add a line to COMPANIES below, or use the "Add a company" box in the app.
+A company whose feed does not answer is skipped and listed as "not reachable".
 """
 import html
 import re
@@ -19,6 +24,17 @@ from datetime import datetime, timezone
 
 import pandas as pd
 import requests
+
+HEADERS = {"User-Agent": "CareerPathFinder/1.0 (Concordia University capstone; open job feeds)",
+           "Accept": "application/json"}
+MAX_DETAILS = 80  # systems that need one call per job for the description: read at most this many per company
+
+
+def _get(url, **kw):
+    r = requests.get(url, headers=HEADERS, timeout=20, **kw)
+    r.raise_for_status()
+    return r.json()
+
 
 # (hiring system, board name in its web address, company name to show)
 COMPANIES = [
@@ -99,18 +115,18 @@ def _date(value):
         return ""
 
 
-def _greenhouse(token, name):
-    url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
-    for j in requests.get(url, timeout=20).json().get("jobs", []):
+def _greenhouse(token, name, details=True):
+    url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content={'true' if details else 'false'}"
+    for j in _get(url).get("jobs", []):
         yield {"title": j.get("title", ""), "employer": name,
                "location": (j.get("location") or {}).get("name", ""),
                "description": _plain(j.get("content")), "link": j.get("absolute_url", ""),
                "posted": _date(j.get("updated_at"))}
 
 
-def _lever(token, name):
+def _lever(token, name, details=True):
     url = f"https://api.lever.co/v0/postings/{token}?mode=json"
-    for j in requests.get(url, timeout=20).json():
+    for j in _get(url):
         cat = j.get("categories") or {}
         locs = cat.get("allLocations") or [cat.get("location", "")]
         lists = " ".join(f"{l.get('text', '')}: {_plain(l.get('content'))}" for l in j.get("lists", []))
@@ -120,9 +136,9 @@ def _lever(token, name):
                "job_type": cat.get("commitment", "")}
 
 
-def _ashby(token, name):
+def _ashby(token, name, details=True):
     url = f"https://api.ashbyhq.com/posting-api/job-board/{token}"
-    for j in requests.get(url, timeout=20).json().get("jobs", []):
+    for j in _get(url).get("jobs", []):
         locs = [j.get("location", "")] + [s.get("location", "") for s in j.get("secondaryLocations", []) or []]
         country = (((j.get("address") or {}).get("postalAddress") or {}).get("addressCountry") or "")
         yield {"title": j.get("title", ""), "employer": name,
@@ -132,13 +148,102 @@ def _ashby(token, name):
                "job_type": j.get("employmentType", "")}
 
 
-FETCHERS = {"greenhouse": _greenhouse, "lever": _lever, "ashby": _ashby}
+def _smartrecruiters(token, name, details=True):
+    base = f"https://api.smartrecruiters.com/v1/companies/{token}/postings"
+    jobs, offset = [], 0
+    while True:
+        page = _get(base, params={"country": "ca", "limit": 100, "offset": offset})
+        jobs += page.get("content", [])
+        offset += 100
+        if offset >= page.get("totalFound", 0) or offset >= 1000:
+            break
+
+    def one(j):
+        loc = j.get("location") or {}
+        desc = ""
+        if details:
+            try:
+                d = _get(f"{base}/{j['id']}")
+                sec = (d.get("jobAd") or {}).get("sections") or {}
+                desc = " ".join(_plain((sec.get(k) or {}).get("text")) for k in
+                                ("jobDescription", "qualifications", "additionalInformation", "companyDescription"))
+            except Exception:
+                pass
+        return {"title": j.get("name", ""), "employer": (j.get("company") or {}).get("name") or name,
+                "location": loc.get("fullLocation") or ", ".join(filter(None, [loc.get("city"), loc.get("region")])),
+                "country": loc.get("country", ""), "description": desc,
+                "link": f"https://jobs.smartrecruiters.com/{token}/{j.get('id', '')}",
+                "posted": _date(j.get("releasedDate")),
+                "job_type": (j.get("typeOfEmployment") or {}).get("label", "")}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        yield from pool.map(one, jobs[:MAX_DETAILS] if details else jobs)
 
 
-def _one(company):
+def _workable(token, name, details=True):
+    data = _get(f"https://apply.workable.com/api/v1/widget/accounts/{token}", params={"details": "true"})
+    for j in data.get("jobs", []):
+        locs = j.get("locations") or [{"city": j.get("city"), "region": j.get("state"), "country": j.get("country")}]
+        first = locs[0] if locs else {}
+        yield {"title": j.get("title", ""), "employer": data.get("name") or name,
+               "location": " / ".join(", ".join(filter(None, [l.get("city"), l.get("region") or l.get("state")]))
+                                      for l in locs),
+               "country": first.get("country") or first.get("countryCode") or j.get("country", ""),
+               "description": _plain(j.get("description")),
+               "link": j.get("url") or j.get("shortlink") or f"https://apply.workable.com/{token}/j/{j.get('shortcode', '')}",
+               "posted": _date(j.get("published_on") or j.get("created_at")),
+               "job_type": j.get("employment_type", "")}
+
+
+def _recruitee(token, name, details=True):
+    data = _get(f"https://{token}.recruitee.com/api/offers/")
+    for j in data.get("offers", []):
+        yield {"title": j.get("title", ""), "employer": j.get("company_name") or name,
+               "location": j.get("location") or ", ".join(filter(None, [j.get("city"), j.get("state_name")])),
+               "country": j.get("country_code") or j.get("country", ""),
+               "description": _plain((j.get("description") or "") + " " + (j.get("requirements") or "")),
+               "link": j.get("careers_url") or j.get("url", ""), "posted": _date(j.get("published_at")),
+               "job_type": j.get("employment_type_code", "")}
+
+
+def _bamboohr(token, name, details=True):
+    base = f"https://{token}.bamboohr.com/careers"
+    data = _get(f"{base}/list")
+    jobs = data.get("result", []) if isinstance(data, dict) else data
+
+    def one(j):
+        loc = j.get("atsLocation") or j.get("location") or {}
+        desc = ""
+        if details:
+            try:
+                d = _get(f"{base}/{j['id']}/detail")
+                desc = _plain(((d.get("result") or {}).get("jobOpening") or {}).get("description"))
+            except Exception:
+                pass
+        return {"title": j.get("jobOpeningName", ""), "employer": name,
+                "location": ", ".join(filter(None, [loc.get("city"), loc.get("state") or loc.get("province")])),
+                "country": loc.get("country", ""), "description": desc,
+                "link": f"{base}/{j.get('id', '')}", "posted": "",
+                "job_type": j.get("employmentStatusLabel", "")}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        yield from pool.map(one, jobs[:MAX_DETAILS] if details else jobs)
+
+
+FETCHERS = {"greenhouse": _greenhouse, "lever": _lever, "ashby": _ashby, "smartrecruiters": _smartrecruiters,
+            "workable": _workable, "recruitee": _recruitee, "bamboohr": _bamboohr}
+
+
+def in_canada(row):
+    """Use the country when the feed gives one, otherwise look for Canadian places in the location."""
+    country = str(row.get("country") or "").strip().lower()
+    if country:
+        return country in ("ca", "can", "canada")
+    return bool(CANADA.search(row.get("location") or ""))
+
+
+def _one(company, details=True):
     ats, token, name = company
     try:
-        rows = [r for r in FETCHERS[ats](token, name) if CANADA.search(r["location"])]
+        rows = [r for r in FETCHERS[ats](token, name, details) if in_canada(r)]
         return rows, {"company": name, "system": ats, "board": token, "jobs in Canada": len(rows), "status": "ok"}
     except Exception as err:
         return [], {"company": name, "system": ats, "board": token, "jobs in Canada": 0,
@@ -162,11 +267,12 @@ def language(text):
 def load(companies=None):
     """Fetch all company feeds at once; return (jobs table, status table)."""
     companies = companies or COMPANIES
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=12) as pool:
         results = list(pool.map(_one, companies))
     rows = [r for rs, _ in results for r in rs]
-    status = pd.DataFrame([s for _, s in results])
+    status = pd.DataFrame([s for _, s in results]).sort_values("jobs in Canada", ascending=False)
     df = pd.DataFrame(rows, columns=["title", "employer", "location", "description", "link", "posted", "job_type"])
+    df["location"] = df["location"].fillna("").astype(str)
     df = df.fillna("")
     places = df["location"].map(_place)
     df["city"] = [c or loc.split(",")[0] for (c, _), loc in zip(places, df["location"])]
@@ -179,3 +285,24 @@ def load(companies=None):
     df["source"] = "Company site"
     df["all_text"] = df["title"] + " · " + df["description"]
     return df.drop_duplicates(subset=["title", "employer", "location"]), status
+
+
+URL_PATTERNS = [
+    ("greenhouse", r"greenhouse\.io/(?:embed/job_board\?for=)?([\w-]+)"),
+    ("lever", r"jobs\.(?:eu\.)?lever\.co/([\w-]+)"),
+    ("ashby", r"jobs\.ashbyhq\.com/([\w.-]+)"),
+    ("smartrecruiters", r"(?:jobs|careers)\.smartrecruiters\.com/([\w-]+)"),
+    ("workable", r"apply\.workable\.com/([\w-]+)"),
+    ("recruitee", r"([\w-]+)\.recruitee\.com"),
+    ("bamboohr", r"([\w-]+)\.bamboohr\.com"),
+]
+
+
+def from_url(url):
+    """Recognise the hiring system and board name in a careers-page address."""
+    for ats, pattern in URL_PATTERNS:
+        m = re.search(pattern, url or "", re.I)
+        if m and m.group(1).lower() not in ("www", "api", "jobs", "boards", "job-boards", "app"):
+            token = m.group(1)
+            return ats, token, token.replace("-", " ").title()
+    return None
