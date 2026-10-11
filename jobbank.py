@@ -100,6 +100,9 @@ FIELDS = {
     "city": ("city",),
     "region": ("economic region",),
     "salary": ("salary condition detail", "salary"),
+    "salary_min": ("salary minimum",),
+    "salary_max": ("salary maximum",),
+    "salary_per": ("salary per",),
     "language": ("official language",),
     "education": ("education los", "education"),
     "experience": ("experience level", "experience"),
@@ -130,4 +133,85 @@ def tidy(df):
     q = out["title"].str.replace(" ", "+", regex=False)
     p = out["province"].str.replace(" ", "+", regex=False)
     out["link"] = "https://www.jobbank.gc.ca/jobsearch/jobsearch?searchstring=" + q + "&locationstring=" + p
-    return out, pick
+    return clean(out), pick
+
+
+# ---- making the fields comparable ------------------------------------------
+# Hours per period used to turn hourly/weekly/monthly pay into a yearly figure
+# (assumption: 40 h/week, 52 weeks; shown in the app as an estimate).
+YEARLY = {"hour": 2080, "day": 260, "week": 52, "month": 12, "year": 1, "annual": 1}
+
+EDUCATION_LEVELS = [  # (pattern, level number, label) - checked in this order
+    (r"no degree|no formal|none required", 1, "No degree required"),
+    (r"doctor|ph\.?d", 6, "Doctorate"),
+    (r"master", 5, "Master's degree"),
+    (r"bachelor|baccalaur|university", 4, "Bachelor's degree"),
+    (r"college|cegep|cégep|diploma|certificate.*(college|trade)|apprentice|trade|vocational|professional training",
+     3, "College, CEGEP, trade or apprenticeship"),
+    (r"secondary|high school|secondaire", 2, "Secondary (high) school"),
+]
+
+
+def _money(x):
+    try:
+        return float(str(x).replace("$", "").replace(",", "").strip())
+    except ValueError:
+        return None
+
+
+def _yearly(row):
+    per = str(row["salary_per"]).strip().lower()
+    factor = next((v for k, v in YEARLY.items() if k in per), None)
+    lo, hi = _money(row["salary_min"]), _money(row["salary_max"])
+    if factor is None or lo is None:
+        return pd.Series([None, None])
+    hi = hi if hi is not None else lo
+    return pd.Series([round(lo * factor), round(hi * factor)])
+
+
+def _education(text):
+    t = str(text).lower()
+    if not t.strip():
+        return pd.Series([None, ""])
+    for pattern, level, label in EDUCATION_LEVELS:
+        if re.search(pattern, t):
+            return pd.Series([level, label])
+    return pd.Series([None, str(text)])
+
+
+def _experience(text):
+    """'1 year to less than 2 years' -> 1.0 ; '7 months to less than 1 year' -> 0.6 ; 'No experience' -> 0."""
+    t = str(text).lower()
+    if not t.strip():
+        return None
+    if "no experience" in t or "will train" in t:
+        return 0.0
+    m = re.search(r"(\d+)\s*(year|month)", t)
+    if not m:
+        return None
+    n = float(m.group(1))
+    return round(n / 12, 1) if m.group(2) == "month" else n
+
+
+def _language(text):
+    t = str(text).lower()
+    has_en, has_fr = "english" in t or "anglais" in t, "french" in t or "français" in t
+    if "bilingual" in t or (has_en and has_fr and " and " in t):
+        return "English and French"
+    if has_en and has_fr:
+        return "English or French"
+    if has_fr:
+        return "French"
+    if has_en:
+        return "English"
+    return ""
+
+
+def clean(out):
+    out["noc"] = out["noc"].astype(str).str.extract(r"(\d{4,5})")[0].fillna("").str.zfill(5).replace("00000", "")
+    out[["salary_year_min", "salary_year_max"]] = out.apply(_yearly, axis=1)
+    out[["education_level", "education"]] = out["education"].apply(_education)
+    out["experience_years"] = out["experience"].map(_experience)
+    out["language"] = out["language"].map(_language)
+    out["posted_date"] = pd.to_datetime(out["posted"], errors="coerce", format="mixed")
+    return out
