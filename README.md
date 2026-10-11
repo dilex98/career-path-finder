@@ -2,6 +2,8 @@
 
 Capstone project, INDU 6993, Concordia University (Loïg Glo, Dilex Manirambona, Anmol Dutt, Clémence Delmont Magazzeni).
 
+**Live app:** https://careerpathfinderrr.streamlit.app
+
 **Goal:** help job seekers in Canada find the jobs they can realistically get, and plan the path to the role they want.
 
 ## Build steps
