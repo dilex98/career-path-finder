@@ -1,5 +1,7 @@
-"""Career Path Finder - capstone project (INDU 6993, Concordia).
 
+App · PY
+"""Career Path Finder - capstone project (INDU 6993, Concordia).
+ 
 Step 1: the box of jobs.
   - Job Bank open data (Government of Canada, monthly), cleaned so salary,
     education, experience, language and dates can be compared.
@@ -9,27 +11,28 @@ Step 1: the box of jobs.
 Next steps (read the CV, rank, explain, ask, update) build on this page.
 """
 import re
-
+import unicodedata
+ 
 import pandas as pd
 import streamlit as st
-
+ 
 import importlib
-
+ 
 import eligibility
 import feeds
 import finder
 import jobbank
 import oasis
-
+ 
 # Streamlit Cloud reruns app.py after each update but can keep old copies of the helper files in memory.
 # Reloading them makes sure every update is picked up without restarting the app.
 for _module in (eligibility, feeds, finder, jobbank, oasis):
     importlib.reload(_module)
-
+ 
 st.set_page_config(page_title="Career Path Finder", page_icon="🧭", layout="wide")
 st.title("Career Path Finder")
 st.caption("Step 1 of the build: the box of jobs · Job Bank open data + official occupation profiles (OaSIS)")
-
+ 
 # ---- 0. about you (asked once; kept while the page is open) -------------------------
 with st.sidebar:
     st.header("About you")
@@ -38,33 +41,33 @@ with st.sidebar:
                           help="Used to flag jobs: ✅ you can apply · ⚠️ check the posting · ❌ not eligible as written.")
     hide_blocked = st.checkbox("Hide jobs I can't apply to (❌)", value=False, key="hide_blocked",
                                disabled=status == "Prefer not to say")
-
+ 
 COLUMNS = ["title", "employer", "occupation", "noc", "city", "province", "salary", "salary_year_min",
            "salary_year_max", "language", "education", "education_level", "experience", "experience_years",
            "job_type", "posted", "posted_date", "source", "link", "description", "all_text"]
 NUMERIC = ["salary_year_min", "salary_year_max", "education_level", "experience_years"]
-
+ 
 # Bump this number whenever the way jobs are read changes, so old cached tables are not reused.
 DATA_VERSION = 11
-
-
+ 
+ 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def get_files():
     return jobbank.list_files()
-
-
+ 
+ 
 @st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=2)
 def get_jobbank(url, version=DATA_VERSION):
     raw = jobbank.download(url)
     jobs, mapping = jobbank.tidy(raw)
     return jobs, mapping, list(raw.columns)
-
-
+ 
+ 
 @st.cache_data(ttl=30 * 24 * 3600, show_spinner=False)
 def get_profiles(version=DATA_VERSION):
     return oasis.load()
-
-
+ 
+ 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def get_one_company(company, version=DATA_VERSION):
     """One company's jobs, kept 6 hours. A failure raises, and failures are never kept, so they retry."""
@@ -72,25 +75,25 @@ def get_one_company(company, version=DATA_VERSION):
     if info["status"].startswith("busy"):
         raise RuntimeError(info["status"])
     return rows, info
-
-
+ 
+ 
 def _one_or_retry_later(company):
     try:
         return get_one_company(company)
     except Exception as err:
         ats, token, name = company
         return [], {"company": name, "system": ats, "board": token, "jobs in Canada": 0, "status": str(err)}
-
-
+ 
+ 
 def get_company_jobs(companies):
     return feeds.load(list(companies), fetch=_one_or_retry_later)
-
-
+ 
+ 
 @st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
 def get_found_companies(version=DATA_VERSION):
     return finder.find()
-
-
+ 
+ 
 def complete(df):
     """Give every table the same columns so they can be stacked together."""
     for col in COLUMNS:
@@ -103,21 +106,38 @@ def complete(df):
     text_cols = [c for c in COLUMNS if c not in NUMERIC + ["posted_date"]]
     df[text_cols] = df[text_cols].fillna("")
     return df
-
-
+ 
+ 
 def pct(series):
     return f"{100 * series.mean():.0f}%" if len(series) else "–"
-
-
+ 
+ 
+def clean_place(s):
+    """'Montréal', 'MONTREAL ', 'Montreal, QC' -> 'Montreal', so the same city is listed once."""
+    if not isinstance(s, str) or not s.strip():
+        return ""
+    s = s.split(",")[0].strip()
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+    return s.title()
+ 
+ 
+def clean_title(s):
+    """'Data Analyst - FT (Montreal)' -> 'Data Analyst', so similar postings are grouped under one position."""
+    if not isinstance(s, str) or not s.strip():
+        return ""
+    s = re.split(r"\s+[-–|/]\s+|\s*\(", s.strip())[0]
+    return s.strip().title()
+ 
+ 
 # ---- 1. load the data ---------------------------------------------------------
 sources = st.multiselect("Job sources", ["Job Bank (government)", "Company job sites"],
                          default=["Job Bank (government)"],
                          help="Company job sites add employer names and full descriptions, but far fewer jobs.")
 tables, notes = [], {}
-
+ 
 with st.spinner("Loading official occupation profiles (OaSIS)…"):
     profiles, oasis_status = get_profiles()
-
+ 
 if "Job Bank (government)" in sources:
     try:
         with st.spinner("Looking for the newest Job Bank file…"):
@@ -142,7 +162,7 @@ if "Job Bank (government)" in sources:
             jb, mapping = jobbank.tidy(raw)
             tables.append(jobbank.combine([complete(jb)])[0])
             notes["Job Bank"] = (list(raw.columns), mapping)
-
+ 
 company_status, found = None, None
 if "Company job sites" in sources:
     st.session_state.setdefault("added", [])
@@ -164,11 +184,11 @@ if "Company job sites" in sources:
     with st.spinner(f"Collecting jobs from {len(companies)} company job sites…"):
         cj, company_status = get_company_jobs(tuple(companies))
     tables.append(complete(cj.copy()))
-
+ 
 if not tables:
     st.info("Choose at least one job source above.")
     st.stop()
-
+ 
 jobs = pd.concat(tables, ignore_index=True)
 if "age" not in jobs.columns:
     jobs["age"], jobs["age_days"] = "", None
@@ -181,18 +201,47 @@ jobs["can_apply"] = [f[0] for f in fits]
 jobs["can_apply_why"] = [f[1] for f in fits]
 # The text the CV will be compared with later: the posting itself plus its occupation profile.
 jobs["all_text"] = jobs["all_text"] + " · " + jobs["noc"].map(lambda n: oasis.profile_text(profiles.get(n)))
-
+ 
+# Cleaned city and job position, used by the City and Job position filters.
+jobs["city_clean"] = jobs["city"].map(clean_place)
+# Some employers write the province in the city box ("Quebec", "Quebec"): treat that as no city.
+jobs.loc[jobs["city_clean"].str.lower() == jobs["province"].map(clean_place).str.lower(), "city_clean"] = ""
+jobs["location"] = jobs["city_clean"] + ", " + jobs["province"]
+jobs["position"] = jobs["title"].map(clean_title)
+ 
 # ---- 2. filters ---------------------------------------------------------------
 st.subheader("Find jobs")
-r1 = st.columns([1, 2, 1])
+ 
+# Row 1: where and what. Each box only lists what is left after the box before it.
+r1 = st.columns(3)
 provinces = sorted(p for p in jobs["province"].unique() if p)
 prov = r1[0].multiselect("Province", provinces,
-                         default=[p for p in provinces if re.search(r"qu[eé]bec|^qc$", p, re.I)])
-words = r1[1].text_input("Keywords in the job title or occupation",
-                         placeholder="e.g. analyst, nurse, accountant, développeur")
-posted_within = r1[2].selectbox("Posted within", ["Any time", "7 days", "14 days", "30 days", "60 days", "90 days"],
-                                help="Job Bank's files have no closing date. Older jobs are more likely to be filled.")
-
+                         default=[p for p in provinces if re.search(r"qu[eé]bec|^qc$", p, re.I)],
+                         placeholder="All provinces")
+ 
+pool = jobs[jobs["province"].isin(prov)] if prov else jobs
+city_counts = pool.loc[pool["city_clean"] != "", "location"].value_counts()
+cities = r1[1].multiselect("City", list(city_counts.index),
+                           format_func=lambda loc: f"{loc} ({city_counts[loc]:,})",
+                           placeholder="All cities in the chosen provinces",
+                           help="Pick as many cities as you want. Only cities in the chosen provinces are listed; "
+                                "the number is how many jobs each has. Type to search.")
+ 
+if cities:
+    pool = pool[pool["location"].isin(cities)]
+position_counts = pool.loc[pool["position"] != "", "position"].value_counts()
+positions = r1[2].multiselect("Job position", list(position_counts.index),
+                              format_func=lambda p: f"{p} ({position_counts[p]:,})",
+                              placeholder="All positions — type to search",
+                              help="Job titles found in the chosen places, most common first. Pick as many as you want.")
+ 
+# Row 2: free-text keywords and freshness
+r1b = st.columns([2, 1])
+words = r1b[0].text_input("Keywords in the job title or occupation",
+                          placeholder="e.g. analyst, nurse, accountant, développeur")
+posted_within = r1b[1].selectbox("Posted within", ["Any time", "7 days", "14 days", "30 days", "60 days", "90 days"],
+                                 help="Job Bank's files have no closing date. Older jobs are more likely to be filled.")
+ 
 r2 = st.columns(4)
 edu_labels = ["Any", "No degree required", "Secondary (high) school", "College, CEGEP, trade or apprenticeship",
               "Bachelor's degree", "Master's degree", "Doctorate"]
@@ -203,10 +252,14 @@ my_exp = r2[1].selectbox("My years of experience", ["Any", 0, 1, 2, 3, 5, 10],
 min_pay = r2[2].number_input("Minimum yearly pay ($)", min_value=0, max_value=300000, value=0, step=5000,
                              help="Estimated: hourly pay × 2,080 hours. Jobs without a salary are kept.")
 langs = r2[3].multiselect("Language of work", ["English", "French", "English and French", "English or French"])
-
+ 
 view = jobs
 if prov:
     view = view[view["province"].isin(prov)]
+if cities:
+    view = view[view["location"].isin(cities)]
+if positions:
+    view = view[view["position"].isin(positions)]
 if words.strip():
     pattern = "|".join(re.escape(w.strip()) for w in words.split(",") if w.strip())
     view = view[view["title"].str.contains(pattern, case=False, na=False, regex=True)
@@ -225,9 +278,9 @@ if langs:
     view = view[view["language"].isin(langs)]
 if hide_blocked:
     view = view[view["can_apply"] != "❌"]
-
+ 
 view = view.sort_values("posted_date", ascending=False, na_position="last")
-
+ 
 m = st.columns(4)
 m[0].metric("Jobs loaded", f"{len(jobs):,}")
 m[1].metric("Matching your filters", f"{len(view):,}")
@@ -235,7 +288,7 @@ m[2].metric("Occupations", f"{view['noc'].replace('', pd.NA).nunique():,}")
 m[3].metric("With an occupation profile", pct(view["has_profile"]))
 st.caption(f"Jobs loaded: {(jobs['source'] != 'Company site').sum():,} from Job Bank · "
            f"{(jobs['source'] == 'Company site').sum():,} from company job sites")
-
+ 
 # ---- 3. the table, with a click to see details ------------------------------------
 view = view.assign(occupation_link=view["noc"].map(oasis.occupation_url))
 table = view[["can_apply", "title", "employer", "occupation", "occupation_link", "city", "province", "salary", "salary_year_min",
@@ -264,7 +317,7 @@ event = st.dataframe(
 )
 if len(view) > 2000:
     st.caption("Showing the 2,000 newest matches. Add a keyword or a filter to narrow the list.")
-
+ 
 rows = event.selection.rows if event and event.selection else []
 if rows:
     job = table.iloc[rows[0]]
@@ -312,7 +365,7 @@ if rows:
                 st.markdown("*Usual requirements*\n" + "\n".join(f"- {r}" for r in p["requirements"]))
         elif not full["description"]:
             st.info("No description or occupation profile is available for this job.")
-
+ 
 # ---- 3b. check any job description ----------------------------------------------
 with st.expander("Check a job description: who can apply? (paste any job ad)"):
     pasted = st.text_area("Paste the full job description here (English or French)", height=150, key="pasted")
@@ -324,7 +377,7 @@ with st.expander("Check a job description: who can apply? (paste any job ad)"):
             st.markdown(f"**For you ({status}):** {icon} {why}")
         else:
             st.caption("Choose your status in the sidebar to see whether you can apply.")
-
+ 
 # ---- 3c. add a company ----------------------------------------------------------
 if "Company job sites" in sources:
     with st.expander("Add a company (paste its careers page link)"):
@@ -346,7 +399,7 @@ if "Company job sites" in sources:
         if st.session_state["added"]:
             st.caption("Added for this visit: " + ", ".join(f"{n} ({a})" for a, _, n in st.session_state["added"])
                        + ". To keep a company permanently, send the link to whoever maintains `feeds.py`.")
-
+ 
 # ---- 4. data quality and sources (for the team and the report) -------------------
 with st.expander("Data quality: how complete is the information? (for the team and the report)"):
     jbv = jobs[jobs["source"] != "Company site"]
@@ -374,7 +427,7 @@ with st.expander("Data quality: how complete is the information? (for the team a
     st.dataframe(oasis_status, hide_index=True, width="stretch")
     st.markdown(f"Sources: [Job Bank open data]({jobbank.DATASET_PAGE}) · [OaSIS]({oasis.DATASET_PAGE}) "
                 "· Open Government Licence – Canada.")
-
+ 
 with st.expander("Where do the jobs come from? (for the team)"):
     if company_status is not None:
         st.write("**Company job sites** (only jobs located in Canada are kept). Systems read: "
@@ -390,3 +443,5 @@ with st.expander("Where do the jobs come from? (for the team)"):
         raw_cols, mapping = notes["Job Bank"]
         st.write("**Job Bank file** – columns found:", raw_cols)
         st.write("How the app reads them:", {k: v or "not found" for k, v in mapping.items()})
+ 
+Claude finished the response
