@@ -249,6 +249,14 @@ with st.expander("Data quality: how complete is the information? (for the team a
                 pct(jbv["employer"] != ""), pct(jbv["description"] != "")],
         })
         st.write(f"Job Bank file: **{len(jbv):,} postings**.")
+        d = jbv["posted_date"].dropna()
+        if len(d):
+            st.markdown(f"**When were these jobs first posted?** Oldest: **{d.min():%Y-%m-%d}** · "
+                        f"newest: **{d.max():%Y-%m-%d}** · {len(d):,} postings have a date.")
+            by_month = d.dt.to_period("M").astype(str).value_counts().sort_index()
+            st.bar_chart(by_month.rename("Postings"), x_label="Month first posted", y_label="Postings")
+            st.caption("If every posting falls in the file's own month, the file holds only the jobs *posted that "
+                       "month*. If there are earlier months too, it holds jobs that were still open.")
         st.dataframe(quality, hide_index=True, width="stretch")
         st.caption("Yearly pay is an estimate: hourly × 2,080 hours (40 h × 52 weeks), weekly × 52, monthly × 12.")
     st.write("**Occupation profiles (OaSIS 2025):**", f"{len(profiles):,} occupations loaded.")
