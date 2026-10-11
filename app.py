@@ -45,7 +45,7 @@ COLUMNS = ["title", "employer", "occupation", "noc", "city", "province", "salary
 NUMERIC = ["salary_year_min", "salary_year_max", "education_level", "experience_years"]
 
 # Bump this number whenever the way jobs are read changes, so old cached tables are not reused.
-DATA_VERSION = 10
+DATA_VERSION = 11
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
@@ -153,7 +153,7 @@ if "Company job sites" in sources:
     if use_finder:
         with st.spinner(f"Checking {len(finder.names())} Canadian employers on 7 hiring systems… (a few minutes the first time)"):
             found = get_found_companies()
-        busy = int(found["busy checks"].iloc[0]) if len(found) else 0
+        busy = int(found["busy checks"].iloc[0]) if len(found) and "busy checks" in found.columns else 0
         if busy:
             st.caption(f"Company finder: {busy:,} of {int(found['checks'].iloc[0]):,} checks found a busy "
                        "system. Click to check again.")
