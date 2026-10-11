@@ -18,8 +18,12 @@ def get_files():
     return jobbank.list_files()
 
 
+# Bump this number whenever jobbank.tidy() changes, so old cached tables are not reused.
+DATA_VERSION = 3
+
+
 @st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=2)
-def get_jobs(url):
+def get_jobs(url, version=DATA_VERSION):
     raw = jobbank.download(url)
     jobs, mapping = jobbank.tidy(raw)
     return jobs, mapping, list(raw.columns)
@@ -49,6 +53,12 @@ except Exception as err:  # the government site can be slow or down
 
 if jobs is None:
     st.stop()
+
+# make sure every column the page uses exists, even in an older cached table
+for col in ["title", "occupation", "city", "province", "salary", "language", "education",
+            "experience", "job_type", "posted", "source", "link"]:
+    if col not in jobs.columns:
+        jobs[col] = ""
 
 # ---- 2. filters ---------------------------------------------------------------
 st.subheader("Find jobs")
