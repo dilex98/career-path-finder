@@ -52,7 +52,7 @@ def get_files():
     return jobbank.list_files()
 
 
-@st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=6)
+@st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=2)
 def get_jobbank(url, version=DATA_VERSION):
     raw = jobbank.download(url)
     jobs, mapping = jobbank.tidy(raw)
@@ -102,25 +102,14 @@ if "Job Bank (government)" in sources:
             files = get_files()
         if not files:
             raise RuntimeError("no English CSV files were listed")
-        n_months = st.slider("Job Bank months to load", 1, 4, 3,
-                             help="Each monthly file only has the jobs first posted that month. Older jobs can still "
-                                  "be open, so we load the last few months together.")
-        jb_tables, loaded = [], []
-        for f in files[:n_months]:
-            with st.spinner(f"Downloading {f['name']} (the first time can take a minute)…"):
-                try:
-                    jb, mapping, raw_cols = get_jobbank(f["url"])
-                except Exception as err:
-                    st.caption(f"Skipped {f['name']}: {err}")
-                    continue
-            jb_tables.append(complete(jb.copy()))
-            loaded.append(f["name"])
-            notes["Job Bank"] = (raw_cols, mapping)
-        if not jb_tables:
-            raise RuntimeError("none of the monthly files could be downloaded")
-        jb_all, repeats = jobbank.combine(jb_tables)
-        st.caption(f"Loaded {len(loaded)} monthly file(s): " + " · ".join(loaded)
-                   + f" · {repeats:,} repeated postings removed.")
+        labels = [f["name"] for f in files]
+        choice = st.selectbox("Job Bank month", labels, index=0,
+                              help="The newest month is picked automatically. Each monthly file holds the jobs "
+                                   "first posted that month.")
+        with st.spinner("Downloading the Job Bank postings (the first time can take a minute)…"):
+            jb, mapping, raw_cols = get_jobbank(files[labels.index(choice)]["url"])
+        notes["Job Bank"] = (raw_cols, mapping)
+        jb_all, _ = jobbank.combine([complete(jb.copy())])
         tables.append(jb_all)
     except Exception as err:  # the government site can be slow or down
         st.warning(f"Could not download the Job Bank file automatically ({err}). "
@@ -206,17 +195,6 @@ m[0].metric("Jobs loaded", f"{len(jobs):,}")
 m[1].metric("Matching your filters", f"{len(view):,}")
 m[2].metric("Occupations", f"{view['noc'].replace('', pd.NA).nunique():,}")
 m[3].metric("With an occupation profile", pct(view["has_profile"]))
-
-jbj = jobs[jobs["source"] != "Company site"]
-if len(jbj) and jbj["age_days"].notna().any():
-    with st.expander("How many Job Bank jobs are probably still open? (compare with the total on jobbank.gc.ca)"):
-        ages = jbj["age_days"]
-        st.dataframe(pd.DataFrame({
-            "Posted within the last": ["30 days", "60 days", "90 days", "120 days", "Any time"],
-            "Job Bank jobs": [f"{(ages <= d).sum():,}" for d in (30, 60, 90, 120)] + [f"{len(jbj):,}"],
-        }), hide_index=True)
-        st.caption("Job Bank's files don't say when a job closes. Compare these numbers with the total on "
-                   "jobbank.gc.ca: the window that comes closest is our best guess of how long jobs stay open.")
 
 # ---- 3. the table, with a click to see details ------------------------------------
 view = view.assign(occupation_link=view["noc"].map(oasis.occupation_url))
