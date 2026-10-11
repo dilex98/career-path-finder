@@ -45,7 +45,7 @@ COLUMNS = ["title", "employer", "occupation", "noc", "city", "province", "salary
 NUMERIC = ["salary_year_min", "salary_year_max", "education_level", "experience_years"]
 
 # Bump this number whenever the way jobs are read changes, so old cached tables are not reused.
-DATA_VERSION = 8
+DATA_VERSION = 9
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
