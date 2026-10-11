@@ -1,5 +1,3 @@
-
-App · PY
 """Career Path Finder - capstone project (INDU 6993, Concordia).
  
 Step 1: the box of jobs.
