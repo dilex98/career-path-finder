@@ -44,6 +44,8 @@ Keyloop, Alimentiv, Immiland, EQ Bank, Kong, Wealthsimple, Dialogue Health, Hoot
 Achievers, Rangle, Xanadu, Sanctuary AI, Waabi, Ada Support, Layer 6, Borealis AI, Vector Institute, Mila Quebec,
 Botpress, Heyday, Alan, Workleap, GSoft, Officevibe, Sharegate, Lightspeed Commerce, Potloc, Hivestack, Vention,
 AlayaCare, Classcraft, Workland, Mirego, Bciti, Unito, Missive, Agendrix, LeddarTech, Kinova, Robotiq, Stornoway,
+Aubainerie, Amilia, Parent, EyeCarePro, RBR, FER-PAL Infrastructure, Thinkific, Jobber, Faire, Fullscript, FIG Financial,
+Cybera, Renewal by Andersen, Versaterm, Quadbridge, StackAdapt, CapIntel, Knix, RioCan, Swapcard, Mistplay, Potloc,
 """
 
 # Board names a company is likely to use, e.g. "Lightspeed Commerce" -> lightspeedcommerce, lightspeed-commerce
