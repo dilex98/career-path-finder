@@ -168,10 +168,12 @@ m[2].metric("Occupations", f"{view['noc'].replace('', pd.NA).nunique():,}")
 m[3].metric("With an occupation profile", pct(view["has_profile"]))
 
 # ---- 3. the table, with a click to see details ------------------------------------
-table = view[["title", "employer", "occupation", "city", "province", "salary", "salary_year_min",
+view = view.assign(occupation_link=view["noc"].map(oasis.occupation_url))
+table = view[["title", "employer", "occupation", "occupation_link", "city", "province", "salary", "salary_year_min",
               "salary_year_max", "language", "education", "experience", "job_type", "posted", "source",
               "link"]].head(2000)
-st.caption("Click a row to see the job's details and its occupation profile.")
+st.info("👉 Tick the small box at the left of a row to open that job's details and its occupation profile below the table. "
+        "The **View** link opens the official occupation page on the Government of Canada website.")
 event = st.dataframe(
     table, width="stretch", hide_index=True, on_select="rerun", selection_mode="single-row", key="jobs_table",
     column_config={
@@ -181,7 +183,9 @@ event = st.dataframe(
         "salary_year_max": st.column_config.NumberColumn("Yearly to (est.)", format="$%d"),
         "language": "Language", "education": "Education", "experience": "Experience",
         "job_type": "Type", "posted": "Posted", "source": "Source",
-        "link": st.column_config.LinkColumn("Link", display_text="Open"),
+        "link": st.column_config.LinkColumn("Job posting", display_text="Open"),
+        "occupation_link": st.column_config.LinkColumn("Occupation details", display_text="View",
+                                                       help="Official Government of Canada page for this occupation"),
     },
 )
 if len(view) > 2000:
@@ -211,6 +215,8 @@ if rows:
         if job["link"]:
             st.link_button("Open on " + ("the company site" if job["source"] == "Company site" else "Job Bank"),
                            job["link"])
+        if full["noc"]:
+            st.link_button("Occupation details (Government of Canada)", oasis.occupation_url(full["noc"]))
     with right:
         if full["description"]:
             st.markdown("**Job description** 🟢 *from the employer's posting*")

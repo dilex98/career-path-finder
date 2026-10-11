@@ -114,3 +114,9 @@ def profile_text(p):
         return ""
     return " ".join([p["lead"], " ".join(p["duties"]), " ".join(p["requirements"]),
                      " ".join(p["skills"]), " ".join(p["example_titles"])])
+
+
+def occupation_url(noc):
+    """Official Government of Canada page for an occupation (NOC 2021)."""
+    return (f"https://noc.esdc.gc.ca/Structure/NOCProfile?GocTemplateCulture=en-CA&code={noc}&version=2021.0"
+            if noc else "")
