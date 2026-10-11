@@ -1,4 +1,4 @@
-"""Career Path Finder - capstone project (INDU 6993, Concordia).
+""" LoloxDilex - Career Path Finder - capstone project (INDU 6993, Concordia).
 
 Step 1: the box of jobs.
   - Job Bank open data (Government of Canada, monthly), cleaned so salary,
