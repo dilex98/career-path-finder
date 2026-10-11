@@ -167,6 +167,11 @@ def _yearly(row):
     if factor is None or lo is None:
         return pd.Series([None, None])
     hi = hi if hi is not None else lo
+    # Fix obvious labelling mistakes in the file: "$21 to $22 annually" is really hourly, "$60,000 hourly" is yearly
+    if factor == 1 and hi < 1000:
+        factor = YEARLY["hour"]
+    elif factor == YEARLY["hour"] and lo > 1000:
+        factor = 1
     return pd.Series([round(lo * factor), round(hi * factor)])
 
 

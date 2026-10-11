@@ -18,6 +18,7 @@ Add a line to COMPANIES below, or use the "Add a company" box in the app.
 A company whose feed does not answer is skipped and listed as "not reachable".
 """
 import html
+import time
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -30,10 +31,32 @@ HEADERS = {"User-Agent": "CareerPathFinder/1.0 (Concordia University capstone; o
 MAX_DETAILS = 80  # systems that need one call per job for the description: read at most this many per company
 
 
-def _get(url, **kw):
-    r = requests.get(url, headers=HEADERS, timeout=20, **kw)
-    r.raise_for_status()
-    return r.json()
+class NotFound(Exception):
+    """The company does not exist on this hiring system (as opposed to the system being busy)."""
+
+
+def _get(url, tries=3, **kw):
+    """Ask a feed politely: if the system says it's busy (429 or 5xx), wait and try again."""
+    for attempt in range(tries):
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=20, **kw)
+        except requests.exceptions.ConnectionError as err:
+            if "resolve" in str(err).lower() or "name or service" in str(err).lower():
+                raise NotFound(url)  # e.g. a recruitee / bamboohr address that doesn't exist
+            if attempt == tries - 1:
+                raise
+            time.sleep(2 * (attempt + 1))
+            continue
+        if r.status_code in (404, 410):
+            raise NotFound(url)
+        if r.status_code == 429 or r.status_code >= 500:
+            if attempt == tries - 1:
+                r.raise_for_status()
+            wait = r.headers.get("Retry-After", "")
+            time.sleep(min(float(wait), 10) if wait.replace(".", "").isdigit() else 2 * (attempt + 1))
+            continue
+        r.raise_for_status()
+        return r.json()
 
 
 # (hiring system, board name in its web address, company name to show)
@@ -315,9 +338,12 @@ def _one(company, details=True):
     try:
         rows = [r for r in FETCHERS[ats](token, name, details) if in_canada(r)]
         return rows, {"company": name, "system": ats, "board": token, "jobs in Canada": len(rows), "status": "ok"}
+    except NotFound:
+        return [], {"company": name, "system": ats, "board": token, "jobs in Canada": 0,
+                    "status": "not found on this system"}
     except Exception as err:
         return [], {"company": name, "system": ats, "board": token, "jobs in Canada": 0,
-                    "status": f"not reachable ({type(err).__name__})"}
+                    "status": f"busy or not reachable ({type(err).__name__}) – will retry"}
 
 
 def experience_years(text):
@@ -334,11 +360,17 @@ def language(text):
     return ""
 
 
-def load(companies=None):
-    """Fetch all company feeds at once; return (jobs table, status table)."""
+def load(companies=None, fetch=None):
+    """Fetch all company feeds at once; return (jobs table, status table).
+    `fetch` lets the app pass its own (cached) version of _one."""
     companies = companies or COMPANIES
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        results = list(pool.map(_one, companies))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(fetch or _one, companies))
+    return build(results)
+
+
+def build(results):
+    """Turn [(rows, status), ...] into the jobs table and the status table."""
     rows = [r for rs, _ in results for r in rs]
     status = pd.DataFrame([s for _, s in results]).sort_values("jobs in Canada", ascending=False)
     df = pd.DataFrame(rows, columns=["title", "employer", "location", "description", "link", "posted", "job_type"])

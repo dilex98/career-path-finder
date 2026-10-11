@@ -65,8 +65,10 @@ def _check(job):
     try:
         rows = [r for r in feeds.FETCHERS[ats](token, name, details=False) if feeds.in_canada(r)]
         return (ats, token, name, len(rows)) if rows else None
-    except Exception:
+    except feeds.NotFound:
         return None
+    except Exception:
+        return "busy"  # the system was busy: not the same as "not there"
 
 
 def find(extra_names=()):
@@ -74,9 +76,12 @@ def find(extra_names=()):
     known = {(a, t.lower()) for a, t, _ in feeds.COMPANIES}
     tries = [(ats, slug, name) for name in names() + list(extra_names) for slug in slugs(name)
              for ats in feeds.FETCHERS if (ats, slug) not in known]
-    with ThreadPoolExecutor(max_workers=24) as pool:
-        found = [r for r in pool.map(_check, tries) if r]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        answers = list(pool.map(_check, tries))
+    found = [r for r in answers if r and r != "busy"]
+    busy = sum(r == "busy" for r in answers)
     df = pd.DataFrame(found, columns=["system", "board", "company", "jobs in Canada"])
+    df["busy checks"], df["checks"] = busy, len(tries)  # kept as columns so they survive caching
     # one row per company per system (both slug spellings can answer)
     return (df.sort_values("jobs in Canada", ascending=False)
               .drop_duplicates(subset=["system", "board"]).reset_index(drop=True))

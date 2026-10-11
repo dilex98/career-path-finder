@@ -45,7 +45,7 @@ COLUMNS = ["title", "employer", "occupation", "noc", "city", "province", "salary
 NUMERIC = ["salary_year_min", "salary_year_max", "education_level", "experience_years"]
 
 # Bump this number whenever the way jobs are read changes, so old cached tables are not reused.
-DATA_VERSION = 9
+DATA_VERSION = 10
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
@@ -66,8 +66,24 @@ def get_profiles(version=DATA_VERSION):
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def get_company_jobs(companies, version=DATA_VERSION):
-    return feeds.load(list(companies))
+def get_one_company(company, version=DATA_VERSION):
+    """One company's jobs, kept 6 hours. A failure raises, and failures are never kept, so they retry."""
+    rows, info = feeds._one(company)
+    if info["status"].startswith("busy"):
+        raise RuntimeError(info["status"])
+    return rows, info
+
+
+def _one_or_retry_later(company):
+    try:
+        return get_one_company(company)
+    except Exception as err:
+        ats, token, name = company
+        return [], {"company": name, "system": ats, "board": token, "jobs in Canada": 0, "status": str(err)}
+
+
+def get_company_jobs(companies):
+    return feeds.load(list(companies), fetch=_one_or_retry_later)
 
 
 @st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
@@ -137,6 +153,13 @@ if "Company job sites" in sources:
     if use_finder:
         with st.spinner(f"Checking {len(finder.names())} Canadian employers on 7 hiring systems… (a few minutes the first time)"):
             found = get_found_companies()
+        busy = int(found["busy checks"].iloc[0]) if len(found) else 0
+        if busy:
+            st.caption(f"Company finder: {busy:,} of {int(found['checks'].iloc[0]):,} checks found a busy "
+                       "system. Click to check again.")
+            if st.button("Check again"):
+                get_found_companies.clear()
+                st.rerun()
         companies += [(r.system, r.board, r.company) for r in found.itertuples()]
     with st.spinner(f"Collecting jobs from {len(companies)} company job sites…"):
         cj, company_status = get_company_jobs(tuple(companies))
@@ -210,6 +233,8 @@ m[0].metric("Jobs loaded", f"{len(jobs):,}")
 m[1].metric("Matching your filters", f"{len(view):,}")
 m[2].metric("Occupations", f"{view['noc'].replace('', pd.NA).nunique():,}")
 m[3].metric("With an occupation profile", pct(view["has_profile"]))
+st.caption(f"Jobs loaded: {(jobs['source'] != 'Company site').sum():,} from Job Bank · "
+           f"{(jobs['source'] == 'Company site').sum():,} from company job sites")
 
 # ---- 3. the table, with a click to see details ------------------------------------
 view = view.assign(occupation_link=view["noc"].map(oasis.occupation_url))
