@@ -163,29 +163,6 @@ if "Job Bank (government)" in sources:
 
 company_status, found = None, None
 st.session_state.setdefault("added", [])
-# The "Add a company" box is always shown; companies added here are loaded even if
-# "Company job sites" is not selected above.
-with st.expander("➕ Add a company (paste its careers page link)", expanded=True):
-    url = st.text_input("Careers page link", key="new_company",
-                        placeholder="e.g. https://jobs.lever.co/eqbank or https://apply.workable.com/acme")
-    if url.strip():
-        hit = feeds.from_url(url)
-        if not hit:
-            st.warning("This link isn't from one of the 7 open hiring systems we can read "
-                       "(Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Recruitee, BambooHR).")
-        elif hit in st.session_state["added"] or any(
-                (a, t.lower()) == (hit[0], hit[1].lower()) for a, t, _ in feeds.COMPANIES):
-            st.info(f"{hit[2]} ({hit[0]}) is already in the job list.")
-        else:
-            rows, info = feeds._one(hit, details=False)
-            st.write(f"Found **{info['system']}** board **{info['board']}**: {info['status']}, "
-                     f"**{info['jobs in Canada']}** jobs in Canada.")
-            if info["status"] == "ok" and st.button("Add it to the job list"):
-                st.session_state["added"].append(hit)
-                st.rerun()
-    if st.session_state["added"]:
-        st.caption("Added for this visit: " + ", ".join(f"{n} ({a})" for a, _, n in st.session_state["added"])
-                   + ". To keep a company permanently, send the link to whoever maintains `feeds.py`.")
 companies = []
 if "Company job sites" in sources:
     use_finder = st.checkbox(
@@ -402,6 +379,30 @@ with st.expander("Check a job description: who can apply? (paste any job ad)"):
             st.markdown(f"**For you ({status}):** {icon} {why}")
         else:
             st.caption("Choose your status in the sidebar to see whether you can apply.")
+
+# ---- 3c. add a company (always shown; companies added here are loaded even if
+# "Company job sites" is not selected above) ------------------------------------------
+with st.expander("➕ Add a company (paste its careers page link)"):
+    url = st.text_input("Careers page link", key="new_company",
+                        placeholder="e.g. https://jobs.lever.co/eqbank or https://apply.workable.com/acme")
+    if url.strip():
+        hit = feeds.from_url(url)
+        if not hit:
+            st.warning("This link isn't from one of the 7 open hiring systems we can read "
+                       "(Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Recruitee, BambooHR).")
+        elif hit in st.session_state["added"] or any(
+                (a, t.lower()) == (hit[0], hit[1].lower()) for a, t, _ in feeds.COMPANIES):
+            st.info(f"{hit[2]} ({hit[0]}) is already in the job list.")
+        else:
+            rows, info = feeds._one(hit, details=False)
+            st.write(f"Found **{info['system']}** board **{info['board']}**: {info['status']}, "
+                     f"**{info['jobs in Canada']}** jobs in Canada.")
+            if info["status"] == "ok" and st.button("Add it to the job list"):
+                st.session_state["added"].append(hit)
+                st.rerun()
+    if st.session_state["added"]:
+        st.caption("Added for this visit: " + ", ".join(f"{n} ({a})" for a, _, n in st.session_state["added"])
+                   + ". To keep a company permanently, send the link to whoever maintains `feeds.py`.")
 
 # ---- 4. data quality and sources (for the team and the report) -------------------
 with st.expander("Data quality: how complete is the information? (for the team and the report)"):
